@@ -13,7 +13,7 @@
         $tokens = $null; $parseErrors = $null
         [void][Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors)
         if ($parseErrors.Count) { throw 'Downloaded setup script has syntax errors. Setup was not started.' }
-        Write-Host 'Review the report before closing the setup terminal. Its downloads, reports and registry backups will then be removed.'
+        Write-Host 'Review the report before closing setup. Downloads and registry backups are removed; debug .log files and last-run state are retained under ProgramData\FreshWindowsSetup.'
         $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $scriptPath + '" -CleanSetupFiles'
         $process = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Verb RunAs -ArgumentList $arguments -PassThru
         $process.WaitForExit()
