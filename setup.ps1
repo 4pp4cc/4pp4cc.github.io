@@ -18,7 +18,8 @@
         $process = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Verb RunAs -ArgumentList $arguments -PassThru
         $process.WaitForExit()
         $process.Refresh()
-        if ($process.ExitCode -ne 0) { Write-Warning "Setup returned code $($process.ExitCode). Review its terminal before closing." }
+        if ($process.ExitCode -ne 0) { Write-Warning "Setup returned code $($process.ExitCode)." }
+        Read-Host 'All setup terminals have closed. Press Enter to clean launcher files and close this last terminal' | Out-Null
     } catch {
         $launcherFailed = $true
         Write-Warning "Setup launch failed: $($_.Exception.Message)"
@@ -75,3 +76,4 @@
         } catch { Write-Warning "Terminal history cleanup was incomplete: $($_.Exception.Message)" }
     }
 }
+exit
