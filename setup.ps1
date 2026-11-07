@@ -55,7 +55,58 @@
         }
         return @('Software','Gpu','Office','Drivers','Debloat') | Where-Object { $bad.ContainsKey($_) }
     }
+
+    function Read-SetupMenu {
+        param([switch]$Initial)
+        Write-Host ''
+        if ($Initial) { Write-Host '  Choose what to run. In 60 seconds, option 1 starts automatically.' -ForegroundColor Cyan }
+        else { Write-Host '  All setup windows have closed. Run again:' -ForegroundColor Cyan }
+        Write-Host '  0) Exit and clean temporary setup files (logs retained)'
+        Write-Host '  1) Run the full normal sequence'
+        Write-Host '  2) Debloat'
+        Write-Host '  3) Software'
+        Write-Host '  4) Office'
+        Write-Host '  5) Drivers (manufacturer + hardware-ID/SDI windows)'
+        Write-Host '  6) AMD/NVIDIA'
+        if ($Initial) { Write-Host '  7) Retry failed or missing parts     [Enter = 1]' }
+        else { Write-Host '  7) Retry failed or missing parts     [Enter = 7]' }
+        if ($Initial) { return Read-StartupChoice }
+        do { $selection = Read-Host 'Choose 0-7' } until ($selection -in @('','0','1','2','3','4','5','6','7'))
+        if ($selection -eq '') { return '7' }
+        return $selection
+    }
+    function Read-StartupChoice {
+        param([ValidateRange(0,60)][int]$TimeoutSeconds = 60)
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        Write-Host '  Press an option key (0-7); no Enter needed.' -ForegroundColor Yellow
+        while ($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+            if (-not [Console]::IsInputRedirected -and [Console]::KeyAvailable) {
+                $key = [Console]::ReadKey($true)
+                if ($key.Key -eq [ConsoleKey]::Enter) { Write-Host '  Selected: 1'; return '1' }
+                $value = [string]$key.KeyChar
+                if ($value -in @('0','1','2','3','4','5','6','7')) {
+                    Write-Host ("  Selected: " + $value)
+                    return $value
+                }
+            }
+            Start-Sleep -Milliseconds 100
+        }
+        Write-Host '  No option selected within 60 seconds. Starting the full normal sequence.' -ForegroundColor Green
+        return '1'
+    }
+    function Get-SetupParts {
+        param([string]$Selection)
+        switch ($Selection) {
+            '1' { 'All' }; '2' { 'Debloat' }; '3' { 'Software' }
+            '4' { 'Office' }; '5' { 'Drivers' }; '6' { 'Gpu' }
+            '7' { Get-FailedSetupParts }
+        }
+    }
     try {
+        Show-SetupSupport
+        $choice = Read-SetupMenu -Initial
+        if ($choice -eq '0') { return }
+        $parts = @(Get-SetupParts $choice)
         New-Item -ItemType Directory -Path $folder | Out-Null
         $scriptPath = Join-Path $folder 'Fresh-Windows-Setup.ps1'
         Write-Host 'Downloading the latest Fresh Windows Setup...'
@@ -63,7 +114,6 @@
         $tokens = $null; $parseErrors = $null
         [void][Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$parseErrors)
         if ($parseErrors.Count) { throw 'Downloaded setup has syntax errors; no setup was started.' }
-        $parts = @('All')
         do {
             foreach ($part in $parts) {
                 $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $scriptPath + '" -CleanSetupFiles -Part ' + $part
@@ -74,23 +124,8 @@
                 $process.Refresh()
                 if ($process.ExitCode -ne 0) { Write-Warning "Setup returned code $($process.ExitCode). Review the saved logs." }
             }
-            Write-Host ''
-            Write-Host '  All setup windows have closed. Run again:' -ForegroundColor Cyan
-            Write-Host '  0) Exit and clean temporary setup files (logs retained)'
-            Write-Host '  1) Run all again'
-            Write-Host '  2) Debloat'
-            Write-Host '  3) Software'
-            Write-Host '  4) Office'
-            Write-Host '  5) Drivers (manufacturer + hardware-ID/SDI windows)'
-            Write-Host '  6) AMD/NVIDIA'
-            Write-Host '  7) Retry failed or missing parts [Enter]'
-            do { $choice = Read-Host 'Choose 0-7' } until ($choice -in @('','0','1','2','3','4','5','6','7'))
-            if ($choice -eq '') { $choice = '7' }
-            $parts = switch ($choice) {
-                '1' { @('All') }; '2' { @('Debloat') }; '3' { @('Software') }
-                '4' { @('Office') }; '5' { @('Drivers') }; '6' { @('Gpu') }
-                '7' { @(Get-FailedSetupParts) }; default { @() }
-            }
+            $choice = Read-SetupMenu
+            $parts = @(Get-SetupParts $choice)
             if ($choice -eq '7' -and -not @($parts).Count) { Write-Host 'No recorded failures or missing required Chrome installation. Choose another part or 0 to exit.' -ForegroundColor Green }
         } while ($choice -ne '0')
     } catch {
