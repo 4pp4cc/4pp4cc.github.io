@@ -5,6 +5,8 @@
     $folder = Join-Path $env:TEMP ('FreshWindowsSetup-' + [guid]::NewGuid().ToString('N'))
     $process = $null
     $launcherFailed = $false
+    $logFolder = Join-Path $env:LOCALAPPDATA 'FreshWindowsSetup\LauncherLogs'
+    $logPath = $null
     function Show-SetupSupport {
         Clear-Host
         Write-Host '  +==========================================================+' -ForegroundColor Cyan
@@ -103,6 +105,9 @@
         }
     }
     try {
+        New-Item -ItemType Directory -Path $logFolder -Force | Out-Null
+        $logPath = Join-Path $logFolder ('launcher-' + (Split-Path $folder -Leaf) + '.log')
+        "Launcher started $(Get-Date -Format o)" | Set-Content -LiteralPath $logPath -Encoding UTF8
         Show-SetupSupport
         $choice = Read-SetupMenu -Initial
         if ($choice -eq '0') { return }
@@ -116,13 +121,37 @@
         if ($parseErrors.Count) { throw 'Downloaded setup has syntax errors; no setup was started.' }
         do {
             foreach ($part in $parts) {
-                $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $scriptPath + '" -CleanSetupFiles -Part ' + $part
-                $process = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Verb RunAs -ArgumentList $arguments -PassThru
+                $quotedScript = "'" + $scriptPath.Replace("'", "''") + "'"
+                $quotedLog = "'" + $logPath.Replace("'", "''") + "'"
+                $bootstrap = @"
+`$ErrorActionPreference = 'Stop'
+`$log = $quotedLog
+try {
+    'Elevated setup starting: $part' | Add-Content -LiteralPath `$log -Encoding UTF8
+    & $quotedScript -CleanSetupFiles -Part '$part'
+    `$code = `$LASTEXITCODE
+    "Elevated setup returned `$code." | Add-Content -LiteralPath `$log -Encoding UTF8
+    exit `$code
+} catch {
+    `$detail = `$_ | Out-String
+    Write-Warning `$detail
+    `$detail | Add-Content -LiteralPath `$log -Encoding UTF8
+    exit 1
+}
+"@
+                $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+                $system = if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { 'Sysnative' } else { 'System32' }
+                $powershell = Join-Path $env:SystemRoot "$system\WindowsPowerShell\v1.0\powershell.exe"
                 Show-SetupSupport
                 Write-Host ("  Currently running: " + $part) -ForegroundColor Cyan
+                $process = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded" -PassThru
                 $process.WaitForExit()
                 $process.Refresh()
-                if ($process.ExitCode -ne 0) { Write-Warning "Setup returned code $($process.ExitCode). Review the saved logs." }
+                if ($process.ExitCode -ne 0) {
+                    $launcherFailed = $true
+                    Write-Warning "Setup returned code $($process.ExitCode). Launcher log: $logPath"
+                    Get-Content -LiteralPath $logPath -Tail 14 | Write-Host
+                }
             }
             $choice = Read-SetupMenu
             $parts = @(Get-SetupParts $choice)
@@ -131,6 +160,10 @@
     } catch {
         $launcherFailed = $true
         Write-Warning "Setup launch failed: $($_.Exception.Message)"
+        if ($logPath -and (Test-Path -LiteralPath $logPath)) {
+            ($_ | Out-String) | Add-Content -LiteralPath $logPath -Encoding UTF8
+            Write-Warning "Launcher log: $logPath"
+        }
         throw
     } finally {
         try {
