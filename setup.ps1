@@ -168,17 +168,14 @@ try {
                 continue
             }
             Write-Host '  0) Exit and delete this session''s setup files and logs'
-            if (-not $officeOnly) {
-                Write-Host '  1) Run the full normal sequence'
-                Write-Host '  2) Debloat'
-                Write-Host '  3) Software'
-            }
+            $requirement = if ($officeOnly) { ' [Windows 11 required]' } else { '' }
+            Write-Host "  1) Run the full normal sequence$requirement"
+            Write-Host "  2) Debloat$requirement"
+            Write-Host "  3) Software$requirement"
             Write-Host '  4) Office'
-            if (-not $officeOnly) {
-                Write-Host '  5) Drivers (manufacturer + hardware-ID/SDI windows)'
-                Write-Host '  6) AMD/NVIDIA/Intel utilities'
-                Write-Host '  7) Retry failed or missing parts'
-            }
+            Write-Host "  5) Drivers (manufacturer + hardware-ID/SDI windows)$requirement"
+            Write-Host "  6) AMD/NVIDIA/Intel utilities$requirement"
+            Write-Host '  7) Retry failed or missing parts'
             Write-Host '  9) View logs and errors'
             $selection = Read-Host 'Choose'
             switch ($selection) {
@@ -186,7 +183,13 @@ try {
                 '4' { $inOffice = $true }
                 '9' { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $folder) }
                 default {
-                    if ($officeOnly) { continue }
+                    if ($officeOnly) {
+                        if ($selection -eq '7') { $inOffice = $true }
+                        elseif ($selection -in @('1','2','3','5','6')) {
+                            $message = 'That option requires Windows 11. Choose 4 for Office on this PC.'
+                        }
+                        continue
+                    }
                     $parts = @(switch ($selection) {
                         '1' { 'All' }; '2' { 'Debloat' }; '3' { 'Software' }
                         '5' { 'Drivers' }; '6' { 'Gpu' }; '7' { Get-FailedSetupParts }
