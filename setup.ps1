@@ -37,7 +37,7 @@
             foreach ($result in @($run.Value.Results | Where-Object Status -eq 'Needs attention')) {
                 if ($run.Name -ne 'All') { $bad[$run.Name]=$true; continue }
                 switch -Regex ([string]$result.Step) {
-                    'GPU|AMD|NVIDIA' { $bad['Gpu']=$true; break }
+                    'GPU|AMD|NVIDIA|Intel Driver & Support Assistant' { $bad['Gpu']=$true; break }
                     'Office|activation|requested command' { $bad['Office']=$true; break }
                     'driver|SDI|Manufacturer|catalog' { $bad['Drivers']=$true; break }
                     'Chrome|Google|Brave|WinGet|Install/update|NetTime|RustDesk|Apps|software' { $bad['Software']=$true; break }
@@ -67,7 +67,7 @@
         Write-Host '  3) Software'
         Write-Host '  4) Office'
         Write-Host '  5) Drivers (manufacturer + hardware-ID/SDI windows)'
-        Write-Host '  6) AMD/NVIDIA'
+        Write-Host '  6) AMD/NVIDIA/Intel utilities'
         if ($Initial) { Write-Host '  7) Retry failed or missing parts     [Enter = 1]' }
         else { Write-Host '  7) Retry failed or missing parts     [Enter = 7]' }
         if ($Initial) { return Read-StartupChoice }
