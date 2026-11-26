@@ -3,10 +3,8 @@
     $ErrorActionPreference = 'Stop'
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $folder = Join-Path $env:TEMP ('FreshWindowsSetup-' + [guid]::NewGuid().ToString('N'))
-    $process = $null
-    $launcherFailed = $false
-    $logFolder = Join-Path $env:LOCALAPPDATA 'FreshWindowsSetup\LauncherLogs'
-    $logPath = $null
+    $logPath = Join-Path $folder 'launcher.log'
+    $scriptPath = Join-Path $folder 'Fresh-Windows-Setup.ps1'
     function Show-SetupSupport {
         Clear-Host
         Write-Host '  +==========================================================+' -ForegroundColor Cyan
@@ -22,12 +20,11 @@
         Write-Host '                 https://ko-fi.com/gzred' -ForegroundColor Green
         Write-Host ''
         Write-Host '  Setup runs in the other windows. This launcher stays here.'
-        Write-Host '  After every setup window closes, choose what to run again.'
-        Write-Host '  Debug .log files and run state are kept in ProgramData\FreshWindowsSetup.'
+        Write-Host '  Ctrl+C exits and keeps this session''s files.'
         Write-Host ''
     }
     function Get-FailedSetupParts {
-        $path = Join-Path $env:ProgramData 'FreshWindowsSetup\State\last-run.json'
+        $path = Join-Path $folder 'State\last-run.json'
         if (-not (Test-Path -LiteralPath $path)) { return @('All') }
         $state = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
         $bad = @{}
@@ -58,163 +55,150 @@
         return @('Software','Gpu','Office','Drivers','Debloat') | Where-Object { $bad.ContainsKey($_) }
     }
 
-    function Read-SetupMenu {
-        param([switch]$Initial)
-        Write-Host ''
-        if ($Initial) { Write-Host '  Choose what to run. In 60 seconds, option 1 starts automatically.' -ForegroundColor Cyan }
-        else { Write-Host '  All setup windows have closed. Run again:' -ForegroundColor Cyan }
-        Write-Host '  0) Exit and clean temporary setup files (logs retained)'
-        Write-Host '  1) Run the full normal sequence'
-        Write-Host '  2) Debloat'
-        Write-Host '  3) Software'
-        Write-Host '  4) Office'
-        Write-Host '  5) Drivers (manufacturer + hardware-ID/SDI windows)'
-        Write-Host '  6) AMD/NVIDIA/Intel utilities'
-        if ($Initial) { Write-Host '  7) Retry failed or missing parts     [Enter = 1]' }
-        else { Write-Host '  7) Retry failed or missing parts     [Enter = 7]' }
-        if ($Initial) { return Read-StartupChoice }
-        do { $selection = Read-Host 'Choose 0-7' } until ($selection -in @('','0','1','2','3','4','5','6','7'))
-        if ($selection -eq '') { return '7' }
-        return $selection
-    }
-    function Read-StartupChoice {
-        param([ValidateRange(0,60)][int]$TimeoutSeconds = 60)
-        $timer = [Diagnostics.Stopwatch]::StartNew()
-        Write-Host '  Press an option key (0-7); no Enter needed.' -ForegroundColor Yellow
-        while ($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
-            if (-not [Console]::IsInputRedirected -and [Console]::KeyAvailable) {
-                $key = [Console]::ReadKey($true)
-                if ($key.Key -eq [ConsoleKey]::Enter) { Write-Host '  Selected: 1'; return '1' }
-                $value = [string]$key.KeyChar
-                if ($value -in @('0','1','2','3','4','5','6','7')) {
-                    Write-Host ("  Selected: " + $value)
-                    return $value
-                }
+    function Remove-LauncherSession {
+        $root = (Resolve-Path -LiteralPath $folder).ProviderPath
+        $temp = (Resolve-Path -LiteralPath $env:TEMP).ProviderPath.TrimEnd('\')
+        if ((Split-Path $root -Parent) -ne $temp -or
+            (Split-Path $root -Leaf) -notmatch '^FreshWindowsSetup-[a-f0-9]{32}$') { throw 'Unexpected session path.' }
+        $pending = New-Object 'Collections.Generic.Stack[string]'
+        $pending.Push($root)
+        while ($pending.Count) {
+            $path = $pending.Pop()
+            if ((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw 'Cleanup refuses linked directories.'
             }
-            Start-Sleep -Milliseconds 100
+            foreach ($item in Get-ChildItem -LiteralPath $path -Force) {
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Cleanup refuses linked items.' }
+                if ($item.PSIsContainer) { $pending.Push($item.FullName) }
+            }
         }
-        Write-Host '  No option selected within 60 seconds. Starting the full normal sequence.' -ForegroundColor Green
-        return '1'
+        Remove-Item -LiteralPath $root -Recurse -Force
     }
-    function Get-SetupParts {
-        param([string]$Selection)
-        switch ($Selection) {
-            '1' { 'All' }; '2' { 'Debloat' }; '3' { 'Software' }
-            '4' { 'Office' }; '5' { 'Drivers' }; '6' { 'Gpu' }
-            '7' { Get-FailedSetupParts }
+
+    function Invoke-LauncherTask {
+        param(
+            [ValidateSet('All','Debloat','Software','Office','Drivers','Gpu','WindowsActivation')][string]$Part,
+            [ValidateSet('Auto','x64','x86','UninstallOlder')][string]$OfficeAction = 'Auto'
+        )
+        if ($Part -ne 'WindowsActivation' -and -not (Test-Path -LiteralPath $scriptPath)) {
+            Write-Host 'Downloading Fresh Windows Setup...'
+            $download = $scriptPath + '.download'
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/4pp4cc/fresh-windows-setup/main/Fresh-Windows-Setup.ps1' -OutFile $download
+            $parseErrors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile($download,[ref]$null,[ref]$parseErrors)
+            if ($parseErrors) { throw ($parseErrors -join [Environment]::NewLine) }
+            Move-Item -LiteralPath $download -Destination $scriptPath -Force
         }
-    }
-    try {
-        New-Item -ItemType Directory -Path $logFolder -Force | Out-Null
-        $logPath = Join-Path $logFolder ('launcher-' + (Split-Path $folder -Leaf) + '.log')
-        "Launcher started $(Get-Date -Format o)" | Set-Content -LiteralPath $logPath -Encoding UTF8
-        Show-SetupSupport
-        $choice = Read-SetupMenu -Initial
-        if ($choice -eq '0') { return }
-        $parts = @(Get-SetupParts $choice)
-        New-Item -ItemType Directory -Path $folder | Out-Null
-        $scriptPath = Join-Path $folder 'Fresh-Windows-Setup.ps1'
-        Write-Host 'Downloading the latest Fresh Windows Setup...'
-        Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/4pp4cc/fresh-windows-setup/main/Fresh-Windows-Setup.ps1' -OutFile $scriptPath
-        $tokens = $null; $parseErrors = $null
-        [void][Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$parseErrors)
-        if ($parseErrors.Count) { throw 'Downloaded setup has syntax errors; no setup was started.' }
-        do {
-            foreach ($part in $parts) {
-                $quotedScript = "'" + $scriptPath.Replace("'", "''") + "'"
-                $quotedLog = "'" + $logPath.Replace("'", "''") + "'"
-                $bootstrap = @"
+        $quotedLog = "'" + $logPath.Replace("'", "''") + "'"
+        $quotedFolder = "'" + $folder.Replace("'", "''") + "'"
+        $quotedScript = "'" + $scriptPath.Replace("'", "''") + "'"
+        $command = if ($Part -eq 'WindowsActivation') {
+            @(
+                '& "$env:SystemRoot\System32\cscript.exe" //Nologo "$env:SystemRoot\System32\slmgr.vbs" /ato | Add-Content -LiteralPath $log -Encoding UTF8'
+                '$licensed = Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID=''55c92734-d682-4d71-983e-d6ec3f16059f'' AND LicenseStatus=1" | Where-Object PartialProductKey'
+                'if (-not $licensed) { throw "Windows activation could not be verified. Open Settings > Activation." }'
+                '$code = 0'
+            ) -join [Environment]::NewLine
+        } else {
+            ('& {0} -Part {1} -OfficeAction {2} -LauncherRoot {3}' -f $quotedScript,$Part,$OfficeAction,$quotedFolder),
+            '$code = $LASTEXITCODE' -join [Environment]::NewLine
+        }
+        $bootstrap = @"
 `$ErrorActionPreference = 'Stop'
 `$log = $quotedLog
 try {
-    'Elevated setup starting: $part' | Add-Content -LiteralPath `$log -Encoding UTF8
-    & $quotedScript -CleanSetupFiles -Part '$part'
-    `$code = `$LASTEXITCODE
-    "Elevated setup returned `$code." | Add-Content -LiteralPath `$log -Encoding UTF8
+    'Starting $Part ($OfficeAction).' | Add-Content -LiteralPath `$log -Encoding UTF8
+    $command
+    "Setup returned `$code." | Add-Content -LiteralPath `$log -Encoding UTF8
     exit `$code
 } catch {
-    `$detail = `$_ | Out-String
-    Write-Warning `$detail
-    `$detail | Add-Content -LiteralPath `$log -Encoding UTF8
+    (`$_ | Out-String) | Add-Content -LiteralPath `$log -Encoding UTF8
     exit 1
 }
 "@
-                $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
-                $system = if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { 'Sysnative' } else { 'System32' }
-                $powershell = Join-Path $env:SystemRoot "$system\WindowsPowerShell\v1.0\powershell.exe"
-                Show-SetupSupport
-                Write-Host ("  Currently running: " + $part) -ForegroundColor Cyan
-                $process = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded" -PassThru
-                $process.WaitForExit()
-                $process.Refresh()
-                if ($process.ExitCode -ne 0) {
-                    $launcherFailed = $true
-                    Write-Warning "Setup returned code $($process.ExitCode). Launcher log: $logPath"
-                    Get-Content -LiteralPath $logPath -Tail 14 | Write-Host
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+        $system = if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { 'Sysnative' } else { 'System32' }
+        $powershell = Join-Path $env:SystemRoot "$system\WindowsPowerShell\v1.0\powershell.exe"
+        $process = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded" -PassThru
+        while (-not $process.WaitForExit(250)) { Start-Sleep -Milliseconds 100 }
+        $process.Refresh()
+        return $process.ExitCode -eq 0
+    }
+
+    $message = ''
+    $failureMessage = 'The action failed and was logged. Press 9 to view logs.'
+    New-Item -ItemType Directory -Path $folder | Out-Null
+    "Launcher started $(Get-Date -Format o)" | Set-Content -LiteralPath $logPath -Encoding UTF8
+    $officeOnly = [int](Get-CimInstance Win32_OperatingSystem).BuildNumber -lt 22000
+    $inOffice = $false
+    while ($true) {
+        Show-SetupSupport
+        if ($message) { Write-Host "  $message"; Write-Host '' }
+        $message = ''
+        try {
+            if ($inOffice) {
+                Write-Host '  Office'
+                if ([Environment]::Is64BitOperatingSystem) { Write-Host '  1) Install or update Office 2024 (64-bit)' }
+                Write-Host '  2) Uninstall older Office and Microsoft 365 desktop apps'
+                Write-Host '  3) Install or update Office 2024 (32-bit)'
+                Write-Host '  4) Open Office activation in Word'
+                Write-Host '  5) Activate Windows and open Office activation'
+                Write-Host '  9) View logs and errors'
+                Write-Host '  0) Return to the main menu'
+                $selection = Read-Host 'Choose (Enter = install for this PC)'
+                switch ($selection) {
+                    '' { if (-not (Invoke-LauncherTask Office Auto)) { $message = $failureMessage } }
+                    '0' { $inOffice = $false }
+                    '1' {
+                        if ([Environment]::Is64BitOperatingSystem -and -not (Invoke-LauncherTask Office x64)) { $message = $failureMessage }
+                    }
+                    '2' {
+                        $confirm = Read-Host 'Remove pre-2024 Office and Microsoft 365 desktop apps? Office 2024 is kept. [y/N]'
+                        if ($confirm -eq 'y' -and -not (Invoke-LauncherTask Office UninstallOlder)) { $message = $failureMessage }
+                    }
+                    '3' { if (-not (Invoke-LauncherTask Office x86)) { $message = $failureMessage } }
+                    '4' { Start-Process -FilePath winword.exe; $message = 'Follow the Microsoft licensing prompts in Word.' }
+                    '5' {
+                        $activated = Invoke-LauncherTask WindowsActivation
+                        Start-Process -FilePath winword.exe
+                        $message = if ($activated) { 'Windows is activated. Follow the licensing prompts in Word.' } else { $failureMessage }
+                    }
+                    '9' { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $folder) }
+                }
+                continue
+            }
+            Write-Host '  0) Exit and delete this session''s setup files and logs'
+            if (-not $officeOnly) {
+                Write-Host '  1) Run the full normal sequence'
+                Write-Host '  2) Debloat'
+                Write-Host '  3) Software'
+            }
+            Write-Host '  4) Office'
+            if (-not $officeOnly) {
+                Write-Host '  5) Drivers (manufacturer + hardware-ID/SDI windows)'
+                Write-Host '  6) AMD/NVIDIA/Intel utilities'
+                Write-Host '  7) Retry failed or missing parts'
+            }
+            Write-Host '  9) View logs and errors'
+            $selection = Read-Host 'Choose'
+            switch ($selection) {
+                '0' { Remove-LauncherSession; return }
+                '4' { $inOffice = $true }
+                '9' { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $folder) }
+                default {
+                    if ($officeOnly) { continue }
+                    $parts = @(switch ($selection) {
+                        '1' { 'All' }; '2' { 'Debloat' }; '3' { 'Software' }
+                        '5' { 'Drivers' }; '6' { 'Gpu' }; '7' { Get-FailedSetupParts }
+                    })
+                    foreach ($part in $parts) {
+                        if (-not (Invoke-LauncherTask $part)) { $message = $failureMessage }
+                    }
                 }
             }
-            $choice = Read-SetupMenu
-            $parts = @(Get-SetupParts $choice)
-            if ($choice -eq '7' -and -not @($parts).Count) { Write-Host 'No recorded failures or missing required Chrome installation. Choose another part or 0 to exit.' -ForegroundColor Green }
-        } while ($choice -ne '0')
-    } catch {
-        $launcherFailed = $true
-        Write-Warning "Setup launch failed: $($_.Exception.Message)"
-        if ($logPath -and (Test-Path -LiteralPath $logPath)) {
-            ($_ | Out-String) | Add-Content -LiteralPath $logPath -Encoding UTF8
-            Write-Warning "Launcher log: $logPath"
-        }
-        throw
-    } finally {
-        try {
-        if (-not $process -or $process.HasExited) {
-            if (Test-Path -LiteralPath $folder) {
-                $resolved = (Resolve-Path -LiteralPath $folder).ProviderPath
-                $tempRoot = (Resolve-Path -LiteralPath $env:TEMP).ProviderPath.TrimEnd('\')
-                $resolvedParent = (Resolve-Path -LiteralPath (Split-Path $resolved -Parent)).ProviderPath.TrimEnd('\')
-                if (-not [string]::Equals($resolvedParent, $tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
-                    (Split-Path $resolved -Leaf) -notmatch '^FreshWindowsSetup-[a-f0-9]{32}$') { throw 'Unexpected launcher cleanup path.' }
-                if ((Get-Item -LiteralPath $resolved -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Launcher cleanup refuses linked folders.' }
-                # This folder contains only the single downloaded script.
-                Remove-Item -LiteralPath (Join-Path $resolved 'Fresh-Windows-Setup.ps1') -Force -ErrorAction SilentlyContinue
-                Remove-Item -LiteralPath $resolved -Force
-            }
-        }
         } catch {
-            Write-Warning "Launcher temporary-file cleanup failed: $($_.Exception.Message)"
+            ($_ | Out-String) | Add-Content -LiteralPath $logPath -Encoding UTF8
+            $message = $failureMessage
         }
-        try {
-            $pattern = '(?i)https?://4pp4cc\.github\.io/setup\.ps1'
-            Get-History | Where-Object CommandLine -match $pattern | ForEach-Object { Clear-History -Id $_.Id }
-            if (Get-Module PSReadLine) {
-                $options = Get-PSReadLineOption
-                $saveStyle = $options.HistorySaveStyle
-                $memory = @([Microsoft.PowerShell.PSConsoleReadLine]::GetHistoryItems() |
-                    Where-Object CommandLine -notmatch $pattern | ForEach-Object CommandLine)
-                Set-PSReadLineOption -HistorySaveStyle SaveNothing
-                try {
-                    [Microsoft.PowerShell.PSConsoleReadLine]::ClearHistory()
-                    foreach ($line in $memory) { [Microsoft.PowerShell.PSConsoleReadLine]::AddToHistory($line) }
-                    $historyPath = $options.HistorySavePath
-                    if (Test-Path -LiteralPath $historyPath) {
-                        $raw = [IO.File]::ReadAllText($historyPath)
-                        # Preserve complete multiline commands unless they contain this launcher URL.
-                        $commands = New-Object 'Collections.Generic.List[string]'
-                        $command = ''
-                        foreach ($line in [regex]::Matches($raw, '[^\r\n]*(?:\r\n|\n|\r|$)')) {
-                            if (-not $line.Value.Length) { continue }
-                            $command += $line.Value
-                            if ($line.Value.TrimEnd([char]13,[char]10).EndsWith([string][char]96)) { continue }
-                            if ($command -notmatch $pattern) { $commands.Add($command) }
-                            $command = ''
-                        }
-                        if ($command -and $command -notmatch $pattern) { $commands.Add($command) }
-                        [IO.File]::WriteAllText($historyPath, ($commands -join ''), (New-Object Text.UTF8Encoding($false)))
-                    }
-                } finally { Set-PSReadLineOption -HistorySaveStyle $saveStyle }
-            }
-            if (-not $launcherFailed) { Clear-Host }
-        } catch { Write-Warning "Terminal history cleanup was incomplete: $($_.Exception.Message)" }
     }
 }
-exit
