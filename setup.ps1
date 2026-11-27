@@ -148,9 +148,8 @@ try {
                     }
                     '3' { if (-not (Invoke-LauncherTask Office x86)) { $message = $failureMessage } }
                     '5' {
-                        $systemFolder = Join-Path $env:SystemRoot 'System32'
-                        Start-Process -FilePath (Join-Path $systemFolder 'cmd.exe') -Verb RunAs -WorkingDirectory $systemFolder `
-                            -ArgumentList 'irm https://get.activated.win | iex'
+                     $psPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+Start-Process -FilePath $psPath -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command "irm https://get.activated.win | iex"'
                     }
                     '9' { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $folder) }
                 }
