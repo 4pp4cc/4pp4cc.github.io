@@ -160,7 +160,8 @@ try {
                 if ([Environment]::Is64BitOperatingSystem) { Write-Host '  1) Install or update Office 2024 (64-bit)' }
                 Write-Host '  2) Uninstall older Office and Microsoft 365 desktop apps'
                 Write-Host '  3) Install or update Office 2024 (32-bit)'
-                Write-Host '  5) Activate Windows and check Office in Word'
+                Write-Host '  5) Activate Office 2024 only'
+                Write-Host '  6) Activate Windows and Office'
                 Write-Host '  9) View logs and errors'
                 Write-Host '  0) Return to the main menu'
                 $selection = Read-Host 'Choose (Enter = install for this PC)'
@@ -176,9 +177,15 @@ try {
                     }
                     '3' { if (-not (Invoke-LauncherTask Office x86)) { $message = $failureMessage } }
                     '5' {
+                        Open-WordForActivationCheck
+                        $message = 'In Word, open File > Account to check or activate Office with your Microsoft license.'
+                    }
+                    '6' {
                         try { $activated = Invoke-LauncherTask WindowsActivation }
                         finally { Open-WordForActivationCheck }
-                        $message = if ($activated) { 'Windows is activated. Check File > Account in Word.' } else { $failureMessage }
+                        $message = if ($activated) {
+                            'Windows is activated. In Word, open File > Account to check or activate Office.'
+                        } else { 'Windows activation failed. Press 9 for logs. Check Office separately in Word.' }
                     }
                     '9' { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $folder) }
                 }
