@@ -116,22 +116,6 @@ try {
         return $process.ExitCode -eq 0
     }
 
-    function Open-WordForActivationCheck {
-        foreach ($view in 'Registry64','Registry32') {
-            $machine = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', $view)
-            try {
-                $key = $machine.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Winword.exe')
-                if (-not $key) { continue }
-                try { $wordPath = $key.GetValue('') } finally { $key.Dispose() }
-                if ($wordPath -and (Test-Path -LiteralPath $wordPath -PathType Leaf)) {
-                    Start-Process -FilePath $wordPath
-                    return
-                }
-            } finally { $machine.Dispose() }
-        }
-        throw 'Word was not found in the installed application paths.'
-    }
-
     $message = ''
     $failureMessage = 'The action failed and was logged. Press 9 to view logs.'
     New-Item -ItemType Directory -Path $folder | Out-Null
@@ -148,7 +132,7 @@ try {
                 if ([Environment]::Is64BitOperatingSystem) { Write-Host '  1) Install or update Office 2024 (64-bit)' }
                 Write-Host '  2) Uninstall older Office and Microsoft 365 desktop apps'
                 Write-Host '  3) Install or update Office 2024 (32-bit)'
-                Write-Host '  5) Activate Office 2024 only'
+                Write-Host '  5) Check Windows drive (CHKDSK, read-only)'
                 Write-Host '  9) View logs and errors'
                 Write-Host '  0) Return to the main menu'
                 $selection = Read-Host 'Choose (Enter = install for this PC)'
@@ -164,8 +148,9 @@ try {
                     }
                     '3' { if (-not (Invoke-LauncherTask Office x86)) { $message = $failureMessage } }
                     '5' {
-                        Open-WordForActivationCheck
-                        $message = 'In Word, open File > Account to check or activate Office with your Microsoft license.'
+                        $systemFolder = Join-Path $env:SystemRoot 'System32'
+                        Start-Process -FilePath (Join-Path $systemFolder 'cmd.exe') -Verb RunAs -WorkingDirectory $systemFolder `
+                            -ArgumentList '/d /c chkdsk.exe %SystemDrive% & pause'
                     }
                     '9' { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $folder) }
                 }
