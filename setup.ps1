@@ -94,9 +94,12 @@
         $quotedScript = "'" + $scriptPath.Replace("'", "''") + "'"
         $command = if ($Part -eq 'WindowsActivation') {
             @(
-                '& "$env:SystemRoot\System32\cscript.exe" //Nologo "$env:SystemRoot\System32\slmgr.vbs" /ato | Add-Content -LiteralPath $log -Encoding UTF8'
-                '$licensed = Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID=''55c92734-d682-4d71-983e-d6ec3f16059f'' AND LicenseStatus=1" | Where-Object PartialProductKey'
-                'if (-not $licensed) { throw "Windows activation could not be verified. Open Settings > Activation." }'
+                '$readLicense = { Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID=''55c92734-d682-4d71-983e-d6ec3f16059f'' AND LicenseStatus=1" | Where-Object PartialProductKey }'
+                'if (-not (& $readLicense)) {'
+                '    & "$env:SystemRoot\System32\cscript.exe" //Nologo "$env:SystemRoot\System32\slmgr.vbs" /ato | Add-Content -LiteralPath $log -Encoding UTF8'
+                '    if (-not (& $readLicense)) { throw "Windows activation could not be verified. Open Settings > Activation." }'
+                '}'
+                '"Windows activation verified." | Add-Content -LiteralPath $log -Encoding UTF8'
                 '$code = 0'
             ) -join [Environment]::NewLine
         } else {
@@ -125,6 +128,22 @@ try {
         return $process.ExitCode -eq 0
     }
 
+    function Open-WordForActivationCheck {
+        foreach ($view in 'Registry64','Registry32') {
+            $machine = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', $view)
+            try {
+                $key = $machine.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Winword.exe')
+                if (-not $key) { continue }
+                try { $wordPath = $key.GetValue('') } finally { $key.Dispose() }
+                if ($wordPath -and (Test-Path -LiteralPath $wordPath -PathType Leaf)) {
+                    Start-Process -FilePath $wordPath
+                    return
+                }
+            } finally { $machine.Dispose() }
+        }
+        throw 'Word was not found in the installed application paths.'
+    }
+
     $message = ''
     $failureMessage = 'The action failed and was logged. Press 9 to view logs.'
     New-Item -ItemType Directory -Path $folder | Out-Null
@@ -141,8 +160,7 @@ try {
                 if ([Environment]::Is64BitOperatingSystem) { Write-Host '  1) Install or update Office 2024 (64-bit)' }
                 Write-Host '  2) Uninstall older Office and Microsoft 365 desktop apps'
                 Write-Host '  3) Install or update Office 2024 (32-bit)'
-                Write-Host '  4) Open Office activation in Word'
-                Write-Host '  5) Activate Windows and open Office activation'
+                Write-Host '  5) Activate Windows and check Office in Word'
                 Write-Host '  9) View logs and errors'
                 Write-Host '  0) Return to the main menu'
                 $selection = Read-Host 'Choose (Enter = install for this PC)'
@@ -157,24 +175,22 @@ try {
                         if ($confirm -eq 'y' -and -not (Invoke-LauncherTask Office UninstallOlder)) { $message = $failureMessage }
                     }
                     '3' { if (-not (Invoke-LauncherTask Office x86)) { $message = $failureMessage } }
-                    '4' { Start-Process -FilePath winword.exe; $message = 'Follow the Microsoft licensing prompts in Word.' }
                     '5' {
-                        $activated = Invoke-LauncherTask WindowsActivation
-                        Start-Process -FilePath winword.exe
-                        $message = if ($activated) { 'Windows is activated. Follow the licensing prompts in Word.' } else { $failureMessage }
+                        try { $activated = Invoke-LauncherTask WindowsActivation }
+                        finally { Open-WordForActivationCheck }
+                        $message = if ($activated) { 'Windows is activated. Check File > Account in Word.' } else { $failureMessage }
                     }
                     '9' { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $folder) }
                 }
                 continue
             }
             Write-Host '  0) Exit and delete this session''s setup files and logs'
-            $requirement = if ($officeOnly) { ' [Windows 11 required]' } else { '' }
-            Write-Host "  1) Run the full normal sequence$requirement"
-            Write-Host "  2) Debloat$requirement"
-            Write-Host "  3) Software$requirement"
+            Write-Host '  1) Run the full normal sequence'
+            Write-Host '  2) Debloat'
+            Write-Host '  3) Software'
             Write-Host '  4) Office'
-            Write-Host "  5) Drivers (manufacturer + hardware-ID/SDI windows)$requirement"
-            Write-Host "  6) AMD/NVIDIA/Intel utilities$requirement"
+            Write-Host '  5) Drivers (manufacturer + hardware-ID/SDI windows)'
+            Write-Host '  6) AMD/NVIDIA/Intel utilities'
             Write-Host '  7) Retry failed or missing parts'
             Write-Host '  9) View logs and errors'
             $selection = Read-Host 'Choose'
