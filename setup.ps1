@@ -77,10 +77,10 @@
 
     function Invoke-LauncherTask {
         param(
-            [ValidateSet('All','Debloat','Software','Office','Drivers','Gpu','WindowsActivation')][string]$Part,
+            [ValidateSet('All','Debloat','Software','Office','Drivers','Gpu')][string]$Part,
             [ValidateSet('Auto','x64','x86','UninstallOlder')][string]$OfficeAction = 'Auto'
         )
-        if ($Part -ne 'WindowsActivation' -and -not (Test-Path -LiteralPath $scriptPath)) {
+        if (-not (Test-Path -LiteralPath $scriptPath)) {
             Write-Host 'Downloading Fresh Windows Setup...'
             $download = $scriptPath + '.download'
             Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/4pp4cc/fresh-windows-setup/main/Fresh-Windows-Setup.ps1' -OutFile $download
@@ -92,26 +92,14 @@
         $quotedLog = "'" + $logPath.Replace("'", "''") + "'"
         $quotedFolder = "'" + $folder.Replace("'", "''") + "'"
         $quotedScript = "'" + $scriptPath.Replace("'", "''") + "'"
-        $command = if ($Part -eq 'WindowsActivation') {
-            @(
-                '$readLicense = { Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID=''55c92734-d682-4d71-983e-d6ec3f16059f'' AND LicenseStatus=1" | Where-Object PartialProductKey }'
-                'if (-not (& $readLicense)) {'
-                '    & "$env:SystemRoot\System32\cscript.exe" //Nologo "$env:SystemRoot\System32\slmgr.vbs" /ato | Add-Content -LiteralPath $log -Encoding UTF8'
-                '    if (-not (& $readLicense)) { throw "Windows activation could not be verified. Open Settings > Activation." }'
-                '}'
-                '"Windows activation verified." | Add-Content -LiteralPath $log -Encoding UTF8'
-                '$code = 0'
-            ) -join [Environment]::NewLine
-        } else {
-            ('& {0} -Part {1} -OfficeAction {2} -LauncherRoot {3}' -f $quotedScript,$Part,$OfficeAction,$quotedFolder),
-            '$code = $LASTEXITCODE' -join [Environment]::NewLine
-        }
+        $command = '& {0} -Part {1} -OfficeAction {2} -LauncherRoot {3}' -f $quotedScript,$Part,$OfficeAction,$quotedFolder
         $bootstrap = @"
 `$ErrorActionPreference = 'Stop'
 `$log = $quotedLog
 try {
     'Starting $Part ($OfficeAction).' | Add-Content -LiteralPath `$log -Encoding UTF8
     $command
+    `$code = `$LASTEXITCODE
     "Setup returned `$code." | Add-Content -LiteralPath `$log -Encoding UTF8
     exit `$code
 } catch {
@@ -161,7 +149,6 @@ try {
                 Write-Host '  2) Uninstall older Office and Microsoft 365 desktop apps'
                 Write-Host '  3) Install or update Office 2024 (32-bit)'
                 Write-Host '  5) Activate Office 2024 only'
-                Write-Host '  6) Activate Windows and Office'
                 Write-Host '  9) View logs and errors'
                 Write-Host '  0) Return to the main menu'
                 $selection = Read-Host 'Choose (Enter = install for this PC)'
@@ -179,13 +166,6 @@ try {
                     '5' {
                         Open-WordForActivationCheck
                         $message = 'In Word, open File > Account to check or activate Office with your Microsoft license.'
-                    }
-                    '6' {
-                        try { $activated = Invoke-LauncherTask WindowsActivation }
-                        finally { Open-WordForActivationCheck }
-                        $message = if ($activated) {
-                            'Windows is activated. In Word, open File > Account to check or activate Office.'
-                        } else { 'Windows activation failed. Press 9 for logs. Check Office separately in Word.' }
                     }
                     '9' { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $folder) }
                 }
